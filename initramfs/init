@@ -63,7 +63,7 @@ BOOT_DEV=""
 for attempt in $(seq 1 30); do
     for dev in /dev/sr* /dev/sd* /dev/vd* /dev/nvme*; do
         [ -b "$dev" ] || continue
-        LABEL=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
+        LABEL=$(blkid "$dev" 2>/dev/null | grep -o 'LABEL="[^"]*"' | cut -d'"' -f2 || true)
         if [ "$LABEL" = "COSTAPINE" ]; then
             BOOT_DEV="$dev"
             break 2
