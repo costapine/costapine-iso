@@ -47,7 +47,7 @@ done
 
 # Load required modules
 msg "Loading kernel modules..."
-for mod in loop squashfs overlay cdrom sr_mod isofs usb-storage ehci-hcd ohci-hcd uhci-hcd xhci-hcd xhci-pci vfat fat nls_cp437 nls_iso8859-1; do
+for mod in virtio virtio_pci virtio_blk virtio_scsi scsi_mod sd_mod ata_generic ata_piix ahci loop squashfs overlay cdrom sr_mod isofs usb-storage ehci-hcd ohci-hcd uhci-hcd xhci-hcd xhci-pci vfat fat nls_cp437 nls_iso8859-1; do
     modprobe "$mod" 2>/dev/null || true
 done
 
