@@ -1,0 +1,131 @@
+#!/bin/busybox sh
+# ============================================================
+# Costapine Linux - Live Boot Init Script
+# ============================================================
+# This script is the /init inside the initramfs. It:
+#   1. Sets up basic pseudo-filesystems
+#   2. Loads required kernel modules
+#   3. Finds the boot medium (ISO/USB) by label COSTAPINE
+#   4. Mounts the squashfs as read-only lower layer
+#   5. Creates a tmpfs-backed writable upper layer
+#   6. Merges them with overlayfs
+#   7. switch_root to the merged filesystem
+# ============================================================
+
+# Strict error handling
+set -e
+
+# Colors for boot messages
+GOOD="\033[1;36m"  # Cyan
+BAD="\033[1;31m"   # Red
+NORMAL="\033[0m"
+
+msg() { echo -e "${GOOD}[costapine]${NORMAL} $1"; }
+err() { echo -e "${BAD}[costapine] ERROR:${NORMAL} $1"; }
+
+# Create busybox symlinks
+/bin/busybox mkdir -p /usr/bin /usr/sbin /sbin /bin
+/bin/busybox --install -s
+
+msg "Costapine Linux - Live Boot"
+msg "Initializing..."
+
+# Mount pseudo-filesystems
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts   devpts   /dev/pts
+
+# Parse kernel command line
+TORAM=0
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        toram)  TORAM=1 ;;
+    esac
+done
+
+# Load required modules
+msg "Loading kernel modules..."
+for mod in loop squashfs overlay cdrom sr_mod isofs usb-storage ehci-hcd ohci-hcd uhci-hcd xhci-hcd xhci-pci vfat fat nls_cp437 nls_iso8859-1; do
+    modprobe "$mod" 2>/dev/null || true
+done
+
+# Wait for devices to settle
+sleep 1
+
+# Create mount points
+mkdir -p /mnt/medium /mnt/lower /mnt/upper /mnt/work /mnt/root
+
+# Find boot medium by label COSTAPINE
+msg "Searching for Costapine boot medium..."
+BOOT_DEV=""
+for attempt in $(seq 1 30); do
+    for dev in /dev/sr* /dev/sd* /dev/vd* /dev/nvme*; do
+        [ -b "$dev" ] || continue
+        LABEL=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
+        if [ "$LABEL" = "COSTAPINE" ]; then
+            BOOT_DEV="$dev"
+            break 2
+        fi
+    done
+    sleep 1
+done
+
+if [ -z "$BOOT_DEV" ]; then
+    err "Could not find boot medium with label COSTAPINE!"
+    err "Dropping to emergency shell."
+    exec /bin/sh
+fi
+
+msg "Found boot medium: $BOOT_DEV"
+
+# Mount boot medium
+mount -o ro "$BOOT_DEV" /mnt/medium
+
+# Check for squashfs
+if [ ! -f /mnt/medium/live/filesystem.squashfs ]; then
+    err "filesystem.squashfs not found on boot medium!"
+    exec /bin/sh
+fi
+
+# Optionally copy to RAM
+if [ "$TORAM" = "1" ]; then
+    msg "Copying system to RAM (this may take a moment)..."
+    mkdir -p /mnt/toram
+    mount -t tmpfs -o size=80% tmpfs /mnt/toram
+    cp /mnt/medium/live/filesystem.squashfs /mnt/toram/
+    umount /mnt/medium
+    SQUASHFS_PATH="/mnt/toram/filesystem.squashfs"
+else
+    SQUASHFS_PATH="/mnt/medium/live/filesystem.squashfs"
+fi
+
+# Mount squashfs as read-only lower layer
+msg "Mounting filesystem..."
+mount -t squashfs -o ro,loop "$SQUASHFS_PATH" /mnt/lower
+
+# Create tmpfs for writable upper layer
+mount -t tmpfs -o size=50% tmpfs /mnt/upper
+mkdir -p /mnt/upper/data /mnt/upper/work
+
+# Mount overlayfs - merging read-only squashfs with writable tmpfs
+mount -t overlay overlay \
+    -o lowerdir=/mnt/lower,upperdir=/mnt/upper/data,workdir=/mnt/upper/work \
+    /mnt/root
+
+# Move mount points into new root
+mkdir -p /mnt/root/mnt/medium /mnt/root/mnt/lower
+mount --move /mnt/medium /mnt/root/mnt/medium 2>/dev/null || true
+mount --move /mnt/lower /mnt/root/mnt/lower 2>/dev/null || true
+
+msg "Switching to Costapine root filesystem..."
+
+# Cleanup and switch root
+umount /proc /sys /dev/pts /dev 2>/dev/null || true
+
+exec switch_root /mnt/root /sbin/init
+
+# If switch_root fails
+err "switch_root failed! Dropping to shell."
+exec /bin/sh

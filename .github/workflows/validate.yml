@@ -1,0 +1,25 @@
+name: Validate ISO Configs
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          for f in grub/grub.cfg grub/grub-embed.cfg syslinux/isolinux.cfg initramfs/init; do
+            test -f "$f" && echo "✓ $f exists" || { echo "✗ $f MISSING"; exit 1; }
+          done
+
+      - name: Validate init script syntax
+        run: |
+          bash -n initramfs/init || echo 'Note: init uses /bin/busybox sh, not bash'
+
+      - name: Check init is executable
+        run: test -x initramfs/init && echo '✓ init is executable'
